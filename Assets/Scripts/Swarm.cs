@@ -38,6 +38,8 @@ public class Swarm : MonoBehaviour
 
     public float obstacleWeight = 0.9f;
 
+    public float wanderWeight = 0.3f;
+
     public float neighbourDistance = 2.0f;
 
     public float initializationRadius = 1.0f;
