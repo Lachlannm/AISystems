@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
+using Unity.VisualScripting;
 using UnityEngine;
 using UnityEngine.AI;
 using UnityEngine.UIElements;
@@ -53,11 +55,15 @@ public class Swarm : MonoBehaviour
     private Transform[] boidObjects;
 
     private float sqrNeighbourDistance;
+    private float fovAngle;
 
     private Vector3 boidZeroGoal;
     private NavMeshPath boidZeroPath;
     private int currentCorner;
     private bool boidZeroNavigatingTowardGoal = false;
+
+    private Vector3[] newVelocities;
+    private Vector3[] newPositions;
 
 
     /// <summary>
@@ -65,6 +71,10 @@ public class Swarm : MonoBehaviour
     /// </summary>
     private void Start()
     {
+        sqrNeighbourDistance = Mathf.Pow(neighbourDistance, 2);
+        fovAngle = Mathf.Cos(Mathf.PI/2.0f);
+        newVelocities = new Vector3[numberOfBoids];
+        newPositions = new Vector3[numberOfBoids];
         InitBoids();
     }
 
@@ -84,11 +94,11 @@ public class Swarm : MonoBehaviour
             var distance = Mathf.Pow(UnityEngine.Random.Range(0f, initializationRadius),1f/3f);
             boids[i].position = transform.position + dir * Vector3.forward * distance;
 
-            dir = Quaternion.Euler(UnityEngine.Random.Range(-initializationForwardRandomRange, initializationForwardRandomRange),
-            UnityEngine.Random.Range(-initializationForwardRandomRange, initializationForwardRandomRange),
-            UnityEngine.Random.Range(-initializationForwardRandomRange, initializationForwardRandomRange));
+            dir = Quaternion.Euler(UnityEngine.Random.Range(-initializationForwardRandomRange/2.0f, initializationForwardRandomRange/2.0f),
+            UnityEngine.Random.Range(-initializationForwardRandomRange/2.0f, initializationForwardRandomRange/2.0f),
+            UnityEngine.Random.Range(-initializationForwardRandomRange/2.0f, initializationForwardRandomRange/2.0f));
             boids[i].forward = dir.eulerAngles;
-            print(dir);
+            boids[i].velocity = boids[i].forward.normalized;
 
             boidObjects[i] = Instantiate(boidPrefab, boids[i].position, dir);
         }
@@ -106,19 +116,110 @@ public class Swarm : MonoBehaviour
         }
     }
 
+    /// <summary>
+    /// returns a list of boids that are considered neighbours
+    /// </summary>
+    /// <param name="boidIndex"></param>
+    /// <returns></returns>
+    public List<int> GetNeighbours(int boidIndex)
+    {
+        var neighbours = new List<int>();
+        for (var i = 0; i < numberOfBoids; i++)
+        {
+            // we aren't really neighbours with ourselves are we?
+            if (i == boidIndex) continue;
+
+            // check if this boid is close and within the FOV
+            if (((boids[i].position - boids[boidIndex].position).sqrMagnitude < sqrNeighbourDistance) &&
+                Vector3.Dot(boids[boidIndex].velocity.normalized,(boids[i].position - boids[boidIndex].position).normalized) < fovAngle)
+            {
+                neighbours.Add(i);
+            }
+        }
+        return neighbours;
+    }
 
     /// <summary>
     /// Sim Loop
     /// </summary>
     private void FixedUpdate()
     {
-        
+        ResetBoidForces();
+
+        var delta = Time.fixedDeltaTime;
+
+        for (int i = 0; i < numberOfBoids; i++)
+        {
+            var neighbours = GetNeighbours(i);
+
+            // neighbour rules
+            if (neighbours.Count > 0)
+            {
+                var separationForce = Vector3.zero;
+                var centerOfFlock = Vector3.zero;
+                var flockAlignment = Vector3.zero;
+
+                for (int j = 0; j < neighbours.Count; j++)
+                {
+                    // seperation
+                    separationForce += boids[i].position - boids[neighbours[j]].position;
+
+                    // calculate the center of mass of neighbours
+                    centerOfFlock += boids[neighbours[j]].position;
+
+                    // calculate the average alignment of neighbours
+                    flockAlignment += boids[neighbours[j]].forward;
+                }
+
+                separationForce = ((separationForce/neighbours.Count).normalized*boidForceScale - boids[i].velocity)*separationWeight;
+                var cohesionForce = ((centerOfFlock/neighbours.Count - boids[i].position).normalized*boidForceScale - boids[i].velocity)*cohesionWeight;
+                var alignmentForce = ((flockAlignment/neighbours.Count - boids[i].velocity).normalized*boidForceScale - boids[i].velocity)*alignmentWeight;
+
+                boids[i].currentTotalForce += separationForce + cohesionForce + alignmentForce;
+            }
+            else
+            {
+                boids[i].currentTotalForce += (boids[i].velocity*boidForceScale - boids[i].velocity)*wanderWeight;
+            }
+
+            // obstacle rule
+            var colliders = Physics.OverlapSphere(boids[i].position,obstacleCheckRadius);
+            var obstacleForce = Vector3.zero;
+            foreach (var collider in colliders)
+            {
+                obstacleForce += (boids[i].position - collider.ClosestPointOnBounds(boids[i].position)).normalized;
+            }
+
+            obstacleForce = (obstacleForce.normalized*boidForceScale - boids[i].velocity)*obstacleWeight;
+
+            boids[i].currentTotalForce += obstacleForce;
+
+            var accel = boids[i].currentTotalForce;
+            newVelocities[i] = boids[i].velocity + accel * delta;
+
+            if (newVelocities[i].magnitude > maxSpeed)
+            {
+                newVelocities[i] = newVelocities[i].normalized * maxSpeed;
+            }
+
+            newPositions[i] = boids[i].position + newVelocities[i] * delta;
+        }
+
+        // apply the new values
+        for (var i = 0; i < numberOfBoids; i++)
+        {
+            boids[i].velocity = newVelocities[i];
+            boids[i].position = newPositions[i];
+
+            boidObjects[i].position = boids[i].position;
+            boidObjects[i].LookAt(boids[i].position+boids[i].velocity.normalized);
+        }
     }
 
 
     private void Update()
     {
-        /* Render information for boidzero, useful for debugging forces and path planning
+        //Render information for boidzero, useful for debugging forces and path planning
         int boidCount = boids.Length;
         for (int i = 1; i < boidCount; i++)
         {
@@ -141,7 +242,6 @@ public class Swarm : MonoBehaviour
             for (int i = 0; i < cornersLength - 1; i++)
                 Debug.DrawLine(boidZeroPath.corners[i], boidZeroPath.corners[i + 1], Color.black);
         }
-        */
     }
 
 
