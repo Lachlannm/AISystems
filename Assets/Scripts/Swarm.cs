@@ -1,6 +1,8 @@
+using System;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.AI;
+using UnityEngine.UIElements;
 
 public class Swarm : MonoBehaviour
 {
@@ -63,7 +65,7 @@ public class Swarm : MonoBehaviour
     /// </summary>
     private void Start()
     {
-
+        InitBoids();
     }
 
     /// <summary>
@@ -71,7 +73,25 @@ public class Swarm : MonoBehaviour
     /// </summary>
     private void InitBoids()
     {
-       
+        boids = new BBoid[numberOfBoids];
+        boidObjects = new Transform[numberOfBoids];
+
+        for (int i = 0; i < numberOfBoids; i++)
+        {
+            boids[i] = new BBoid();
+
+            var dir = Quaternion.Euler(UnityEngine.Random.Range(0f, 360f),UnityEngine.Random.Range(0f, 360f),UnityEngine.Random.Range(0f, 360f));
+            var distance = Mathf.Pow(UnityEngine.Random.Range(0f, initializationRadius),1f/3f);
+            boids[i].position = transform.position + dir * Vector3.forward * distance;
+
+            dir = Quaternion.Euler(UnityEngine.Random.Range(-initializationForwardRandomRange, initializationForwardRandomRange),
+            UnityEngine.Random.Range(-initializationForwardRandomRange, initializationForwardRandomRange),
+            UnityEngine.Random.Range(-initializationForwardRandomRange, initializationForwardRandomRange));
+            boids[i].forward = dir.eulerAngles;
+            print(dir);
+
+            boidObjects[i] = Instantiate(boidPrefab, boids[i].position, dir);
+        }
     }
 
 
@@ -80,7 +100,10 @@ public class Swarm : MonoBehaviour
     /// </summary>
     public void ResetBoidForces()
     {
-        
+        for (int i = 0; i < numberOfBoids; i++)
+        {
+            boids[i].currentTotalForce = Vector3.zero;
+        }
     }
 
 
