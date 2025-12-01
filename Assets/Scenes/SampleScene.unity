@@ -645,9 +645,11 @@ MonoBehaviour:
   cohesionWeight: 1
   goalWeight: 1
   obstacleWeight: 0.9
+  wanderWeight: 0.3
   neighbourDistance: 2
   initializationRadius: 1
   initializationForwardRandomRange: 50
+  timeScale: 0
 --- !u!1 &935089792
 GameObject:
   m_ObjectHideFlags: 0

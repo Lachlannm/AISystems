@@ -50,6 +50,8 @@ public class Swarm : MonoBehaviour
 
     public float initializationForwardRandomRange = 50f;
 
+    public float timeScale = 1f;
+
     private BBoid[] boids;
 
     private Transform[] boidObjects;
@@ -65,6 +67,10 @@ public class Swarm : MonoBehaviour
     private Vector3[] newVelocities;
     private Vector3[] newPositions;
 
+    private Vector3 worldBoundMin = new Vector3(-8f, 1f, -8f);
+    private Vector3 worldBoundMax = new Vector3(8f, 4f, 8f);
+
+    private Vector3 flockCenter;
 
     /// <summary>
     /// Start, this function is called before the first frame
@@ -97,7 +103,7 @@ public class Swarm : MonoBehaviour
             dir = Quaternion.Euler(UnityEngine.Random.Range(-initializationForwardRandomRange/2.0f, initializationForwardRandomRange/2.0f),
             UnityEngine.Random.Range(-initializationForwardRandomRange/2.0f, initializationForwardRandomRange/2.0f),
             UnityEngine.Random.Range(-initializationForwardRandomRange/2.0f, initializationForwardRandomRange/2.0f));
-            boids[i].forward = dir.eulerAngles;
+            boids[i].forward = dir * Vector3.forward;
             boids[i].velocity = boids[i].forward.normalized;
 
             boidObjects[i] = Instantiate(boidPrefab, boids[i].position, dir);
@@ -113,6 +119,10 @@ public class Swarm : MonoBehaviour
         for (int i = 0; i < numberOfBoids; i++)
         {
             boids[i].currentTotalForce = Vector3.zero;
+            boids[i].separation = Vector3.zero;
+            boids[i].cohesion = Vector3.zero;
+            boids[i].alignment = Vector3.zero;
+            boids[i].obstacle = Vector3.zero;
         }
     }
 
@@ -131,7 +141,7 @@ public class Swarm : MonoBehaviour
 
             // check if this boid is close and within the FOV
             if (((boids[i].position - boids[boidIndex].position).sqrMagnitude < sqrNeighbourDistance) &&
-                Vector3.Dot(boids[boidIndex].velocity.normalized,(boids[i].position - boids[boidIndex].position).normalized) < fovAngle)
+                Vector3.Dot((boids[i].position - boids[boidIndex].position).normalized,boids[boidIndex].velocity.normalized) > fovAngle)
             {
                 neighbours.Add(i);
             }
@@ -146,7 +156,7 @@ public class Swarm : MonoBehaviour
     {
         ResetBoidForces();
 
-        var delta = Time.fixedDeltaTime;
+        var delta = Time.fixedDeltaTime*timeScale;
 
         for (int i = 0; i < numberOfBoids; i++)
         {
@@ -155,45 +165,20 @@ public class Swarm : MonoBehaviour
             // neighbour rules
             if (neighbours.Count > 0)
             {
-                var separationForce = Vector3.zero;
-                var centerOfFlock = Vector3.zero;
-                var flockAlignment = Vector3.zero;
-
-                for (int j = 0; j < neighbours.Count; j++)
-                {
-                    // seperation
-                    separationForce += boids[i].position - boids[neighbours[j]].position;
-
-                    // calculate the center of mass of neighbours
-                    centerOfFlock += boids[neighbours[j]].position;
-
-                    // calculate the average alignment of neighbours
-                    flockAlignment += boids[neighbours[j]].forward;
-                }
-
-                separationForce = ((separationForce/neighbours.Count).normalized*boidForceScale - boids[i].velocity)*separationWeight;
-                var cohesionForce = ((centerOfFlock/neighbours.Count - boids[i].position).normalized*boidForceScale - boids[i].velocity)*cohesionWeight;
-                var alignmentForce = ((flockAlignment/neighbours.Count - boids[i].velocity).normalized*boidForceScale - boids[i].velocity)*alignmentWeight;
-
-                boids[i].currentTotalForce += separationForce + cohesionForce + alignmentForce;
+                boids[i].separation = CalculateSeperationForce(i, neighbours);
+                boids[i].cohesion += CalculateCohesionForce(i, neighbours);
+                boids[i].alignment += CalculateAlignmentForce(i, neighbours);
             }
             else
             {
-                boids[i].currentTotalForce += (boids[i].velocity*boidForceScale - boids[i].velocity)*wanderWeight;
+                boids[i].separation += CalculateWanderForce(i);
             }
 
-            // obstacle rule
-            var colliders = Physics.OverlapSphere(boids[i].position,obstacleCheckRadius);
-            var obstacleForce = Vector3.zero;
-            foreach (var collider in colliders)
-            {
-                obstacleForce += (boids[i].position - collider.ClosestPointOnBounds(boids[i].position)).normalized;
-            }
+            boids[i].obstacle += CalculateObstacleForce(i);
 
-            obstacleForce = (obstacleForce.normalized*boidForceScale - boids[i].velocity)*obstacleWeight;
+            boids[i].currentTotalForce = boids[i].separation + boids[i].cohesion + boids[i].alignment + boids[i].obstacle;
 
-            boids[i].currentTotalForce += obstacleForce;
-
+            // determine new position and velocity
             var accel = boids[i].currentTotalForce;
             newVelocities[i] = boids[i].velocity + accel * delta;
 
@@ -210,27 +195,115 @@ public class Swarm : MonoBehaviour
         {
             boids[i].velocity = newVelocities[i];
             boids[i].position = newPositions[i];
+            boids[i].forward = boids[i].velocity.normalized;
 
             boidObjects[i].position = boids[i].position;
-            boidObjects[i].LookAt(boids[i].position+boids[i].velocity.normalized);
+            boidObjects[i].LookAt(boids[i].position+boids[i].forward);
         }
     }
 
+    private Vector3 CalculateSeperationForce(int boidIndex, List<int> neighbours)
+    {
+        var distances = Vector3.zero;
+
+        for (int i = 0; i < neighbours.Count; i++)
+        {
+            distances += boids[boidIndex].position - boids[neighbours[i]].position;
+        }
+
+        return ((distances/neighbours.Count).normalized*boidForceScale - boids[boidIndex].velocity)*separationWeight;
+    }
+
+    private Vector3 CalculateCohesionForce(int boidIndex, List<int> neighbours)
+    {
+        var positions = Vector3.zero;
+
+        for (int i = 0; i < neighbours.Count; i++)
+        {
+            positions += boids[neighbours[i]].position;
+        }
+
+        if (boidIndex == 0) flockCenter = positions/neighbours.Count;
+
+        return ((positions/neighbours.Count - boids[boidIndex].position).normalized*boidForceScale - boids[boidIndex].velocity)*cohesionWeight;
+    }
+
+    private Vector3 CalculateAlignmentForce(int boidIndex, List<int> neighbours)
+    {
+        var directions = Vector3.zero;
+
+        for (int i = 0; i < neighbours.Count; i++)
+        {
+            directions += boids[neighbours[i]].velocity.normalized;
+        }
+
+        return ((directions/neighbours.Count - boids[boidIndex].velocity).normalized*boidForceScale - boids[boidIndex].velocity)*alignmentWeight;
+    }
+
+    private Vector3 CalculateWanderForce(int boidIndex)
+    {
+        return (boids[boidIndex].velocity*boidForceScale - boids[boidIndex].velocity)*wanderWeight;
+    }
+
+    private Vector3 CalculateObstacleForce(int boidIndex)
+    {
+        // obstacle rule
+        var colliders = Physics.OverlapSphere(boids[boidIndex].position,obstacleCheckRadius);
+        var obstacleForce = Vector3.zero;
+        foreach (var collider in colliders)
+        {
+            obstacleForce += (boids[boidIndex].position - collider.ClosestPointOnBounds(boids[boidIndex].position)).normalized;
+        }
+
+        if (boids[boidIndex].position.x > worldBoundMax.x)
+        {
+            obstacleForce += new Vector3(-1f, 0f, 0f); 
+        }
+        if (boids[boidIndex].position.y > worldBoundMax.y)
+        {
+            obstacleForce += new Vector3(0f, -1f, 0f); 
+        }
+        if (boids[boidIndex].position.z > worldBoundMax.z)
+        {
+            obstacleForce += new Vector3(0f, 0f, -1f); 
+        }
+
+        if (boids[boidIndex].position.x < worldBoundMin.x)
+        {
+            obstacleForce += new Vector3(1f, 0f, 0f); 
+        }
+        if (boids[boidIndex].position.y < worldBoundMin.y)
+        {
+            obstacleForce += new Vector3(0f, 1f, 0f); 
+        }
+        if (boids[boidIndex].position.z < worldBoundMin.z)
+        {
+            obstacleForce += new Vector3(0f, 0f, 1f); 
+        }
+
+        return (obstacleForce.normalized*boidForceScale - boids[boidIndex].velocity)*obstacleWeight;
+    }
 
     private void Update()
     {
         //Render information for boidzero, useful for debugging forces and path planning
-        int boidCount = boids.Length;
-        for (int i = 1; i < boidCount; i++)
+        // int boidCount = boids.Length;
+        // for (int i = 1; i < boidCount; i++)
+        // {
+        //     Vector3 boidNeighbourVec = boids[i].position - boids[0].position;
+        //     if (boidNeighbourVec.sqrMagnitude < sqrNeighbourDistance &&
+        //             Vector3.Dot(boidNeighbourVec, boids[0].forward) > 0f)
+        //     { 
+        //         Debug.DrawLine(boids[0].position, boids[i].position, Color.blue);
+        //     }
+        // }
+
+        var neighbours = GetNeighbours(0);
+        for (int i = 0; i < neighbours.Count; i++)
         {
-            Vector3 boidNeighbourVec = boids[i].position - boids[0].position;
-            if (boidNeighbourVec.sqrMagnitude < sqrNeighbourDistance &&
-                    Vector3.Dot(boidNeighbourVec, boids[0].forward) > 0f)
-            { 
-                Debug.DrawLine(boids[0].position, boids[i].position, Color.blue);
-            }
+            Debug.DrawLine(boids[0].position, boids[neighbours[i]].position, Color.blue);
         }
-        
+                
         Debug.DrawLine(boids[0].position, boids[0].position + boids[0].alignment, Color.green);
         Debug.DrawLine(boids[0].position, boids[0].position + boids[0].separation, Color.magenta);
         Debug.DrawLine(boids[0].position, boids[0].position + boids[0].cohesion, Color.yellow);
@@ -242,6 +315,11 @@ public class Swarm : MonoBehaviour
             for (int i = 0; i < cornersLength - 1; i++)
                 Debug.DrawLine(boidZeroPath.corners[i], boidZeroPath.corners[i + 1], Color.black);
         }
+    }
+
+    public void OnDrawGizmos()
+    {
+        Gizmos.DrawSphere(flockCenter,0.02f);
     }
 
 
