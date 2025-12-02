@@ -73,7 +73,6 @@ public class Swarm : MonoBehaviour
     private Vector3 worldBoundMax = new Vector3(8f, 4f, 8f);
 
     private Vector3 flockCenter;
-    public NavMeshSurface navMesh;
 
     /// <summary>
     /// Start, this function is called before the first frame
@@ -187,7 +186,9 @@ public class Swarm : MonoBehaviour
             // boid zero path stuff
             if (i == 0 && boidZeroNavigatingTowardGoal)
             {
-                if ((boids[0].position - boidZeroGoal).sqrMagnitude < 1)
+                NavMeshHit boidZeroHit;
+                NavMesh.SamplePosition(boids[0].position, out boidZeroHit, Mathf.Infinity, NavMesh.AllAreas);
+                if ((boidZeroHit.position - boidZeroGoal).sqrMagnitude < 1)
                 {
                     if (currentCorner < boidZeroPath.corners.Length-1)
                     {
