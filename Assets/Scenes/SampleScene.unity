@@ -649,7 +649,9 @@ MonoBehaviour:
   neighbourDistance: 2
   initializationRadius: 1
   initializationForwardRandomRange: 50
-  timeScale: 0
+  timeScale: 1
+  boidCam: 0
+  navMesh: {fileID: 2110060625}
 --- !u!1 &935089792
 GameObject:
   m_ObjectHideFlags: 0

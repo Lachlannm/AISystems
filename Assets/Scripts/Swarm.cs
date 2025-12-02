@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using Unity.AI.Navigation;
 using Unity.VisualScripting;
 using UnityEngine;
 using UnityEngine.AI;
@@ -52,12 +53,13 @@ public class Swarm : MonoBehaviour
 
     public float timeScale = 1f;
 
+    public bool boidCam;
+
     private BBoid[] boids;
 
     private Transform[] boidObjects;
 
     private float sqrNeighbourDistance;
-    private float fovAngle;
 
     private Vector3 boidZeroGoal;
     private NavMeshPath boidZeroPath;
@@ -71,6 +73,7 @@ public class Swarm : MonoBehaviour
     private Vector3 worldBoundMax = new Vector3(8f, 4f, 8f);
 
     private Vector3 flockCenter;
+    public NavMeshSurface navMesh;
 
     /// <summary>
     /// Start, this function is called before the first frame
@@ -78,7 +81,6 @@ public class Swarm : MonoBehaviour
     private void Start()
     {
         sqrNeighbourDistance = Mathf.Pow(neighbourDistance, 2);
-        fovAngle = Mathf.Cos(Mathf.PI/2.0f);
         newVelocities = new Vector3[numberOfBoids];
         newPositions = new Vector3[numberOfBoids];
         InitBoids();
@@ -95,18 +97,22 @@ public class Swarm : MonoBehaviour
         for (int i = 0; i < numberOfBoids; i++)
         {
             boids[i] = new BBoid();
-
+    
             var dir = Quaternion.Euler(UnityEngine.Random.Range(0f, 360f),UnityEngine.Random.Range(0f, 360f),UnityEngine.Random.Range(0f, 360f));
             var distance = Mathf.Pow(UnityEngine.Random.Range(0f, initializationRadius),1f/3f);
             boids[i].position = transform.position + dir * Vector3.forward * distance;
 
             dir = Quaternion.Euler(UnityEngine.Random.Range(-initializationForwardRandomRange/2.0f, initializationForwardRandomRange/2.0f),
-            UnityEngine.Random.Range(-initializationForwardRandomRange/2.0f, initializationForwardRandomRange/2.0f),
-            UnityEngine.Random.Range(-initializationForwardRandomRange/2.0f, initializationForwardRandomRange/2.0f));
+            UnityEngine.Random.Range(-initializationForwardRandomRange, initializationForwardRandomRange),
+            UnityEngine.Random.Range(-initializationForwardRandomRange, initializationForwardRandomRange));
             boids[i].forward = dir * Vector3.forward;
             boids[i].velocity = boids[i].forward.normalized;
 
             boidObjects[i] = Instantiate(boidPrefab, boids[i].position, dir);
+            if (i == 0 && boidCam)
+            {
+                boidObjects[i].AddComponent<Camera>();
+            }
         }
     }
 
@@ -141,7 +147,7 @@ public class Swarm : MonoBehaviour
 
             // check if this boid is close and within the FOV
             if (((boids[i].position - boids[boidIndex].position).sqrMagnitude < sqrNeighbourDistance) &&
-                Vector3.Dot((boids[i].position - boids[boidIndex].position).normalized,boids[boidIndex].velocity.normalized) > fovAngle)
+                Vector3.Dot(boids[i].position - boids[boidIndex].position,boids[boidIndex].velocity.normalized) > 0f)
             {
                 neighbours.Add(i);
             }
@@ -177,6 +183,29 @@ public class Swarm : MonoBehaviour
             boids[i].obstacle += CalculateObstacleForce(i);
 
             boids[i].currentTotalForce = boids[i].separation + boids[i].cohesion + boids[i].alignment + boids[i].obstacle;
+
+            // boid zero path stuff
+            if (i == 0 && boidZeroNavigatingTowardGoal)
+            {
+                if ((boids[0].position - boidZeroGoal).sqrMagnitude < 1)
+                {
+                    if (currentCorner < boidZeroPath.corners.Length-1)
+                    {
+                        currentCorner += 1;
+                        boidZeroGoal = boidZeroPath.corners[currentCorner];
+                    }
+                    else
+                    {
+                        boidZeroPath.ClearCorners();
+                        boidZeroNavigatingTowardGoal = false;
+                    }
+                }
+
+                if (boidZeroNavigatingTowardGoal)
+                {
+                    boids[0].currentTotalForce += ((boidZeroGoal - boids[0].position)*boidForceScale - boids[0].velocity)*goalWeight;
+                }
+            }
 
             // determine new position and velocity
             var accel = boids[i].currentTotalForce;
@@ -234,15 +263,15 @@ public class Swarm : MonoBehaviour
 
         for (int i = 0; i < neighbours.Count; i++)
         {
-            directions += boids[neighbours[i]].velocity.normalized;
+            directions += boids[neighbours[i]].velocity;
         }
 
-        return ((directions/neighbours.Count - boids[boidIndex].velocity).normalized*boidForceScale - boids[boidIndex].velocity)*alignmentWeight;
+        return ((directions/neighbours.Count).normalized*boidForceScale - boids[boidIndex].velocity)*alignmentWeight;
     }
 
     private Vector3 CalculateWanderForce(int boidIndex)
     {
-        return (boids[boidIndex].velocity*boidForceScale - boids[boidIndex].velocity)*wanderWeight;
+        return (boids[boidIndex].velocity.normalized*boidForceScale - boids[boidIndex].velocity)*wanderWeight;
     }
 
     private Vector3 CalculateObstacleForce(int boidIndex)
@@ -320,12 +349,26 @@ public class Swarm : MonoBehaviour
     public void OnDrawGizmos()
     {
         Gizmos.DrawSphere(flockCenter,0.02f);
+        //Gizmos.DrawSphere(boids[0].position,obstacleCheckRadius);
     }
 
 
     public void SetGoal(Vector3 goal)
     {
+        if (boidZeroNavigatingTowardGoal) return;
+        NavMeshHit goalHit;
+        NavMeshHit boidZeroHit;
+        NavMesh.SamplePosition(goal, out goalHit, Mathf.Infinity, NavMesh.AllAreas);
+        NavMesh.SamplePosition(boids[0].position, out boidZeroHit, Mathf.Infinity, NavMesh.AllAreas);
+        boidZeroPath = new();
 
+        if (NavMesh.CalculatePath(boidZeroHit.position, goalHit.position, NavMesh.AllAreas, boidZeroPath))
+        {
+            boidZeroGoal = boidZeroPath.corners[0];
+            boidZeroNavigatingTowardGoal = true;
+            currentCorner = 0;
+        }
+        Debug.Log(boidZeroPath.status);
     }
 }
 
